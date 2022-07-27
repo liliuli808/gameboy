@@ -87,9 +87,10 @@ var RamBankMap = map[byte]uint8{
 }
 
 type CartridgeProps struct {
-	MBCType string
-	ROMBank uint8
-	RAMBank uint8
+	MBCType   string
+	ROMBank   uint8
+	RAMBank   uint8
+	ROMLength int
 }
 
 type Cartridge struct {
@@ -102,7 +103,8 @@ type MBC interface {
 	ReadRomBank(uint16) byte
 	ReadRamBank(uint16) byte
 	WriteRamBank(uint16, byte)
-	SaveRamBank(string)
+	HandleBanking(uint16, byte)
+	SaveRam(string)
 }
 
 type MBCRom struct {
@@ -157,20 +159,42 @@ func (core *Core) readRomFile(romPath string) []byte {
 	return readDataFile(romPath, false)
 }
 
+// MBC1 /**
 type MBC1 struct {
 	rom            []byte
+	CurrentROMBank byte
 	RAMBank        []byte
 	CurrentRAMBank byte
 	EnableRAM      bool
 	ROMBankingMode bool
 }
 
-func (mbc *MBC1) ReadRoomBank(address uint16) byte {
+func (mbc *MBC1) ReadRomBank(address uint16) byte {
 	newAddress := uint32(address - 0x4000)
 	return mbc.rom[newAddress+(uint32(mbc.CurrentRAMBank)*0x4000)]
 }
 
-func (mbc *MBC1) WriteRoomBank(address uint16, date byte) {
+/*
+	A000-BFFF - RAM Bank 00-03, if any (Read/Write)
+		This area is used to address external RAM in the cartridge (if any).
+		External RAM is often battery buffered, allowing to store game positions
+		or high score tables, even if the gameboy is turned off, or if the cartridge
+		is removed from the gameboy. Available RAM sizes are: 2KByte (at A000-A7FF),
+		8KByte (at A000-BFFF), and 32KByte (in form of four 8K banks at A000-BFFF).
+*/
+func (mbc *MBC1) ReadRamBank(address uint16) byte {
+	newAddress := uint32(address - 0xA000)
+	return mbc.RAMBank[newAddress+(uint32(mbc.CurrentRAMBank)*0x2000)]
+}
+
+func (mbc *MBC1) WriteRamBank(address uint16, data byte) {
+	if mbc.EnableRAM {
+		newAddress := uint32(address - 0xA000)
+		mbc.RAMBank[newAddress+(uint32(mbc.CurrentRAMBank)*0x2000)] = data
+	}
+}
+
+func (mbc *MBC1) WriteRomBank(address uint16, date byte) {
 	if !mbc.EnableRAM {
 		return
 	}
@@ -194,14 +218,13 @@ func (mbc *MBC1) HandleBanking(address uint16, val byte) {
 
 	if address >= 0x4000 && address < 0x6000 {
 		if mbc.ROMBankingMode {
-			mbc.DoChangeHiRomBank(val)
+			mbc.DoChangeHiRomBank(address, val)
 		} else {
 			mbc.DoRAMBankChange(val)
 		}
 	}
 }
 
-//
 func (mbc *MBC1) DoRamBankEnable(val byte) {
 	testData := val & 0xF
 	if testData == 0xA {
@@ -213,7 +236,7 @@ func (mbc *MBC1) DoRamBankEnable(val byte) {
 	}
 }
 
-func (mbc *MBC1) DoChangeHiRomBank(val byte) {
+func (mbc *MBC1) DoChangeHiRomBank(address uint16, val byte) {
 	// turn off the upper 3 bits of the current rom
 	mbc.CurrentRAMBank &= 31
 
