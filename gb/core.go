@@ -11,6 +11,7 @@ type Timer struct {
 type Core struct {
 	Cartridge Cartridge
 	Memory    Memory
+	CPU       CPU
 
 	/*
 	   +++++++++++++++++++++++
